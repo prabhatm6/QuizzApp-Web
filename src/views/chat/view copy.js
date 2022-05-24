@@ -298,6 +298,7 @@ const Room = React.memo((props) => {
             }
         });
         try {
+            return;
             navigator.mediaDevices
                 .getUserMedia({ video: false, audio: false })
                 .then((stream) => {
@@ -840,7 +841,7 @@ const Room = React.memo((props) => {
                                                     src={`https://ui-avatars.com/api/?name=${username}&background=random`}
                                                 ></img>
                                                 {/* <div className="circle" style={{backgroundColor: `${bgcolor[Math.floor(Math.random() * bgcolor.length)]}`}}>
-                                                        
+
                                                         <span className="initials">{username.charAt(0).toUpperCase()}</span> */}
                                                 {/* </div> */}
                                             </>

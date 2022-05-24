@@ -29,6 +29,8 @@ import {
 import { connect } from "react-redux";
 import $ from "jquery";
 import InfiniteScroll from "react-infinite-scroll-component";
+import VaniSetupHelper from "../videocall/utilities/VaniSetupHelper";
+import VideoHandler from "../videocall/utilities/VideoHandler";
 let contestId;
 
 const mapStateToProps = (state) => {
@@ -249,6 +251,8 @@ class DetailContest extends Component {
     }
 
     joinRoomHandler(data) {
+        console.log("wait break", data);
+        const v = VaniSetupHelper.getInstance().setUp(data._id, false);
         // this.props.history.push('/detail-contest/'+contestId+'?'+data._id);
         this.props.setSocket("");
         this.props.joinRoomReqSend(true);
@@ -304,6 +308,7 @@ class DetailContest extends Component {
                     return response.json();
                 })
                 .then((data) => {
+                    console.log("new data", data.data);
                     if (data.code === 200) {
                         this.setState({ isLoading: false });
                         this.props.setRoomCreatorId(data.data.createdBy);
@@ -312,6 +317,10 @@ class DetailContest extends Component {
                                 fields["contestId"] +
                                 "?" +
                                 data.data._id
+                        );
+                        const v = VaniSetupHelper.getInstance().setUp(
+                            data.data._id,
+                            true
                         );
                     } else {
                         this.setState({ isLoading: false });
@@ -903,7 +912,7 @@ class DetailContest extends Component {
                                             <h3>Set Password</h3>
                                             <h4>
                                                 Password needs to be set for a
-                                                private contest. Keeping it
+                                                privat e contest. Keeping it
                                                 blank will make your contest
                                                 Public to all.
                                             </h4>

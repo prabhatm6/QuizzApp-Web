@@ -6,7 +6,8 @@ import Peer from "peerjs";
 import { reactLocalStorage } from "reactjs-localstorage";
 import { ToastContainer, toast } from "react-toastify";
 import { useHistory } from "react-router-dom";
-import { useDispatch, useSelector } from "react-redux";
+import { connect, useDispatch, useSelector } from "react-redux";
+import configuration from "../../config";
 // eslint-disable-next-line no-unused-vars
 import {
     joinRoomReqSend,
@@ -19,8 +20,15 @@ import {
     setrequestSender,
     removerequestSender,
 } from "../../actions/socketAction";
-import AddFriendByFriendList from "./modals/addFriendByFriendList.js"
+import AddFriendByFriendList from "./modals/addFriendByFriendList.js";
 import { CModal, CModalBody } from "@coreui/react";
+import DuringVideoCall from "../videocall/pages/DuringVideoCall";
+import VideoHandler from "../videocall/utilities/VideoHandler";
+import Utility from "../videocall/utilities/Utility";
+import { VaniEvent } from "vani-meeting-client";
+import { VaniEventListener } from "vani-meeting-client/lib/utility/VaniEventListener";
+import VaniSetupHelper from "../videocall/utilities/VaniSetupHelper";
+import LocalVideo from "../videocall/pages/LocalVideo";
 // import socket from "socket.io-client/lib/socket";
 // import hark from "hark";
 
@@ -39,6 +47,8 @@ const Video = React.memo((props) => {
 });
 
 const Room = React.memo((props) => {
+    const [participant, setParticipants] = useState([]);
+    console.log(props);
     const userId = JSON.parse(reactLocalStorage.get("userData")).userId;
     const username = JSON.parse(reactLocalStorage.get("userData")).name;
     const profilePic = JSON.parse(reactLocalStorage.get("userData")).profilePic;
@@ -68,6 +78,9 @@ const Room = React.memo((props) => {
 
     const [isAudioMuted, setAudioMute] = useState(false);
     const [isVideoMuted, setVideoMuted] = useState(false);
+    const [connected, setConnected] = useState(
+        VaniSetupHelper.getInstance().isConnected
+    );
     const [forcerender, setforcerender] = useState(0);
 
     const [confirmationModel, setconfirmationModel] = useState(false);
@@ -75,9 +88,11 @@ const Room = React.memo((props) => {
     // eslint-disable-next-line no-unused-vars
     const [moderatorLeave, setmoderatorLeave] = useState(false);
     const [openModelForMembers, setopenModelForMembers] = useState(false);
-    const [openModelForInviteFriend, setopenModelForInviteFriend] = useState(false);
+    const [openModelForInviteFriend, setopenModelForInviteFriend] =
+        useState(false);
     const [addFriendByName, setaddFriendByName] = useState(false);
-    const [addFriendByFriendListModal, setaddFriendByFriendListModal] = useState(false);
+    const [addFriendByFriendListModal, setaddFriendByFriendListModal] =
+        useState(false);
 
     const cameraOff = () => {
         if (isVideoMuted) {
@@ -119,7 +134,36 @@ const Room = React.memo((props) => {
             console.log("toggleMuteVoice error => ", error);
         }
     };
+    console.log('props', props);
+    useEffect(() => {
+        console.log(
+            "        VaniSetupHelper.getInstance().isConnected        ",
+            VaniSetupHelper.getInstance().isConnected
+        );
 
+        VideoHandler.getInstance().eventEmitter.on("OnConnected", () => {
+            console.log("connected");
+            setConnected(true);
+        });
+
+        if (VaniSetupHelper.getInstance().isSetupCalled === false) {
+            VaniSetupHelper.getInstance().setUp(props.roomId, false);
+            dispatch(setWaitScreen(true));
+        }
+    }, []);
+
+    useEffect(() => {
+        console.log(
+            "        VaniSetupHelper.getInstance().isConnected        ",
+            VaniSetupHelper.getInstance().isConnected
+        );
+        if (
+            VaniSetupHelper.getInstance().isConnected &&
+            VideoHandler.getInstance().getMeetingRequest().isAdmin === false
+        ) {
+            VaniSetupHelper.getInstance().askIfUserCanJoinMeeting();
+        }
+    }, [connected]);
     const userVideoUnMuteVoice = () => {
         try {
             // clone main data
@@ -218,6 +262,46 @@ const Room = React.memo((props) => {
         history.push("/dashboard", { state: null });
     };
 
+    const onNewChatMessageReceived = (messagePayload) => {
+        if (messagePayload.type === "JoinRequest") {
+            console.log("new Join request");
+            console.log("join data", messagePayload.sender);
+            if (
+                messagePayload.sender &&
+                messagePayload.sender.userData &&
+                messagePayload.sender.userData.name
+            ) {
+                setParticipants([...participant, messagePayload.sender]);
+                setrequestModel(true);
+            }
+        } else if (messagePayload.type === "JoinRequestApproved") {
+            console.log("new Join Approved");
+            const selfParticipant = VideoHandler.getInstance()
+                .getMeetingHandler()
+                .getAllParticipants()
+                .find(
+                    (participant) =>
+                        participant.userId ===
+                        VideoHandler.getInstance().getMeetingRequest().userId
+                );
+            if (selfParticipant) {
+                selfParticipant.userData.isApproved = true;
+            }
+            VideoHandler.getInstance()
+                .getMeetingHandler()
+                .updateParticipantData(selfParticipant);
+            dispatch(setWaitScreen(false));
+            // props.setWaitScreen(false);
+            // console.log(messagePayload.participant.userData)
+        } else if (messagePayload.type === "JoinRequestDeclined") {
+            console.log("new Join request declined");
+            moderatorResponse(null, false);
+            // props.setWaitScreen(false);
+            return;
+            // console.log(messagePayload.participant.userData)
+        }
+    };
+
     const handleDisqualify = (joinedUserId, qualify) => {
         try {
             let data = {
@@ -238,6 +322,11 @@ const Room = React.memo((props) => {
     };
 
     useEffect(() => {
+        VideoHandler.getInstance()
+            .getMeetingHandler()
+            .getEventEmitter()
+            .on(VaniEvent.OnNewChatMessageReceived, onNewChatMessageReceived);
+
         console.log("isModerator", isModerator);
 
         //////moderator reponse from server;
@@ -263,6 +352,7 @@ const Room = React.memo((props) => {
                 }, 3000);
             }
         });
+        return;
         try {
             navigator.mediaDevices
                 .getUserMedia({ video: false, audio: true })
@@ -297,26 +387,26 @@ const Room = React.memo((props) => {
                     //     socketRef.current.emit("user-speaking", { joinedUserId: userId, speaking: false, roomId });
                     // });
 
-                    if (peerServer) {
-                        console.log("peer connection => ", peerServer);
+                    // if (peerServer) {
+                    //     console.log("peer connection => ", peerServer);
 
-                        peerServer.on("connection", (data) => {
-                            console.log("peer connect with data => ", data);
-                        });
+                    //     peerServer.on("connection", (data) => {
+                    //         console.log("peer connect with data => ", data);
+                    //     });
 
-                        peerServer.on("disconnected", (data) => {
-                            console.log("peer disconnect with data => ", data);
-                        });
-                    }
+                    //     peerServer.on("disconnected", (data) => {
+                    //         console.log("peer disconnect with data => ", data);
+                    //     });
+                    // }
 
                     peerServer.on("error", (error) =>
                         console.log("peer error => ", error)
                     );
 
-                    userVideo.current.srcObject = stream;
-                    userVideoStream.current = stream;
-                    currentStream.current = stream;
-                    console.log("USERID ::", userId, stream);
+                    // userVideo.current.srcObject = stream;
+                    // userVideoStream.current = stream;
+                    // currentStream.current = stream;
+                    // console.log("USERID ::", userId, stream);
 
                     ///send join room request
                     if (joinroomreq) {
@@ -709,186 +799,140 @@ const Room = React.memo((props) => {
         roomId,
         userId,
     ]);
+    const deleteRoom = async () => {
+        console.log("deleting room id", roomId);
 
+
+        const data = new FormData();
+        data.append("roomId", roomId);
+        fetch(configuration.apiURL + "api/game/deleteGameRoomData", {
+            method: "POST",
+            headers: {
+                contentType: "application/json",
+                Authorization: "Bearer " + reactLocalStorage.get("clientToken"),
+            },
+            body: data,
+        })
+            .then((data) => {
+                console.log("success");
+                return true;
+            })
+            .catch((err) => console.log(err));
+        return true;
+    };
+    async function endCall() {
+        if (isModerator) {
+            const data = new FormData();
+            data.append("roomId", roomId);
+            fetch(configuration.apiURL + "api/game/deleteGameRoomData", {
+                method: "POST",
+                headers: {
+                    contentType: "application/json",
+                    Authorization:
+                        "Bearer " + reactLocalStorage.get("clientToken"),
+                },
+                body: data,
+            })
+                .then((data) => {
+                    VideoHandler.getInstance().cleanUp();
+                    window.location.href = "/";
+                })
+                .catch((err) => console.log(err));
+        } else {
+            VideoHandler.getInstance().cleanUp();
+            window.location.href = "/";
+        }
+        return true;
+    }
+    async function onLink(link) {
+        console.log(link)
+        var newlink = "hello"
+        // link = "join the meeting with" + link + "  "
+        try {
+            // await navigator.clipboard.writeText(newlink);
+        }
+        catch (err) {
+            console.error(err)
+        }
+    }
+    async function copyLink() {
+       
+        // const response = await fetch(
+        //     " https://firebasedynamiclinks.googleapis.com/v1/shortLinks?key=AIzaSyDg-UszS6Y5Qj3xmY2YQun-6wv2dXwO2Rk",
+        //     {
+        //         method: "POST",
+        //         headers: {
+        //             "Content-Type": "application/json",
+        //         },
+        //         body: JSON.stringify({
+        //             dynamicLinkInfo: {
+        //                 domainUriPrefix: "https://murabbo.page.link",
+        //                 link: window.location.href,
+        //                 androidInfo: {
+        //                     androidPackageName: "com.cozycrater.murabbo",
+        //                 },
+        //                 iosInfo: {
+        //                     iosBundleId: "com.cozycrater.murabbo",
+        //                 },
+        //             },
+        //         }),
+        //     }
+        // )
+        // const res = await response.json();
+        // try {
+        //     await navigator.clipboard.writeText(res.shortLink);
+        // }
+        // catch (err) {
+        //     console.error(err)
+        // }
+            // .then((res) => res.json())
+            // .then((res) => {
+            //     onLink(res.shortLink);
+            //     // navigator.clipboard.writeText(res.shortLink).then(() => {
+            //     //     toast("Link Copied!");
+            //     // });
+            // })
+            // .catch((err) => console.log(err));
+        // toast.dismiss();
+    }
+    console.log("view", props);
+    console.log("props.waitScreen", props.waitScreen);
+    console.log("participants", participant);
     return (
         <>
             <section
                 className=""
                 id="video"
-                style={{ width: props.width, position: "absolute" }}
+                style={{
+                    width: props.width,
+                    position: "absolute",
+                    height: "calc(100% - 75px)",
+                }}
             >
                 <ToastContainer
                     position="top-right"
                     autoClose={5000}
                     style={{ top: "80px" }}
                 />
-                <div className="">
-                    <div className="video-wrapper">
-                        <div className="video-previe video-center">
-                            <div
-                                className={
-                                    otherUserSteams.length === 0
-                                        ? "video-person1"
-                                        : otherUserSteams.length === 1
-                                            ? "video-person2"
-                                            : "video-person3"
-                                }
-                                style={{ position: "relative" }}
-                            >
-                                <div
-                                    className="video-inner-wrap video-center circle-body"
-                                    style={{ position: "relative" }}
-                                >
-                                    <video ref={userVideo} muted autoPlay />
-                                </div>
-                                {isVideoMuted ? (
-                                    <div
-                                        className="video-inner-wrap video-center circle-body inline"
-                                        style={{
-                                            position: "absolute",
-                                            width: `${otherUserSteams.length === 0
-                                                ? "96%"
-                                                : "92%"
-                                                }`,
-                                        }}
-                                    >
-                                        {profilePic ? (
-                                            <img
-                                                alt=""
-                                                className="profile11"
-                                                src={profilePic}
-                                            ></img>
-                                        ) : (
-                                            <>
-                                                <img
-                                                    alt=""
-                                                    className="profile11"
-                                                    src={`https://ui-avatars.com/api/?name=${username}&background=random`}
-                                                ></img>
-                                                {/* <div className="circle" style={{backgroundColor: `${bgcolor[Math.floor(Math.random() * bgcolor.length)]}`}}>
-                                                        
-                                                        <span className="initials">{username.charAt(0).toUpperCase()}</span> */}
-                                                {/* </div> */}
-                                            </>
-                                        )}
-                                    </div>
-                                ) : null}
-                            </div>
-
-                            {otherUserSteams.map((item, index, array) => {
-                                return (
-                                    <div
-                                        className={
-                                            otherUserSteams.length === 0
-                                                ? "video-person1"
-                                                : otherUserSteams.length === 1
-                                                    ? "video-person2"
-                                                    : "video-person3"
-                                        }
-                                        style={{ position: "relative" }}
-                                    >
-                                        <div
-                                            className={
-                                                "video-inner-wrap video-center circle-body"
-                                            }
-                                            style={{
-                                                position: "relative",
-                                                border: `${item.speaking
-                                                    ? "3px solid #12b5cb"
-                                                    : ""
-                                                    }`,
-                                            }}
-                                        >
-                                            <Video
-                                                key={index.toString()}
-                                                item={item.stream}
-                                            />
-                                            {item.Video ? null : (
-                                                <div
-                                                    className="video-inner-wrap video-center circle-body inline"
-                                                    style={{
-                                                        position: "absolute",
-                                                        width: "92",
-                                                    }}
-                                                >
-                                                    <img
-                                                        alt=""
-                                                        className="profile11"
-                                                        src={
-                                                            item.userData.image
-                                                        }
-                                                    ></img>
-                                                </div>
-                                            )}
-                                            <a>
-                                                <img
-                                                    alt=""
-                                                    src={
-                                                        item.Audio
-                                                            ? "img/mic1.png"
-                                                            : "img/mute(1).png"
-                                                    }
-                                                />
-                                            </a>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                    <div
-                        className="video-bottom-bar"
-                        style={{ width: props.width }}
-                    >
-                        <div className="video-wrapper video-center">
-                            <a onClick={cameraOff}>
-                                <img
-                                    alt=""
-                                    src={
-                                        isVideoMuted
-                                            ? "img/camera-off(1).png"
-                                            : "img/camera.png"
-                                    }
-                                />
-                            </a>
-                            <a onClick={muteAudio}>
-                                <img
-                                    alt=""
-                                    src={
-                                        isAudioMuted
-                                            ? "img/mute(1).png"
-                                            : "img/mic1.png"
-                                    }
-                                />
-                            </a>
-                            <a onClick={() => setopenModelForMembers(true)}>
-                                <img
-                                    alt=""
-                                    src={
-                                        openModelForMembers
-                                            ? "img/group2.png"
-                                            : "img/group.png"
-                                    }
-                                />
-                            </a>
-                            <a onClick={() => setopenModelForInviteFriend(true)}>
-                                <img
-                                    alt=""
-                                    src={"img/invite.png"}
-                                />
-                            </a>
-                            <a onClick={() => setconfirmationModel(true)}>
-                                <img
-                                    alt=""
-                                    className="video-end"
-                                    src="img/call-end.png"
-                                />
-                            </a>
-                        </div>
-                    </div>
-                </div>
-
-                <AddFriendByFriendList open={addFriendByFriendListModal} setOpen={setaddFriendByFriendListModal} />
+                {!connected ? null : props.waitScreen ? (
+                    <LocalVideo />
+                ) : (
+                    <DuringVideoCall
+                        isModerator={isModerator}
+                        roomId={roomId}
+                        history={props.history}
+                        endCall={endCall}
+                        openModelForInviteFriend={setopenModelForInviteFriend}
+                        setopenModelForMembers={setopenModelForMembers}
+                        openModelForMembers={openModelForMembers}
+                        setconfirmationModel={setconfirmationModel}
+                        waitScreen={props.waitScreen}
+                    />
+                )}
+                <AddFriendByFriendList
+                    open={addFriendByFriendListModal}
+                    setOpen={setaddFriendByFriendListModal}
+                />
 
                 <CModal
                     show={confirmationModel}
@@ -947,7 +991,7 @@ const Room = React.memo((props) => {
                                                     }}
                                                     className="pink_btn"
                                                     type="button"
-                                                    onClick={logout}
+                                                    onClick={endCall}
                                                 >
                                                     Exit
                                                 </button>
@@ -1011,79 +1055,85 @@ const Room = React.memo((props) => {
 
                                     <div className="container">
                                         <div className="row">
-                                            {requestSender.map((item) => {
-                                                return (
-                                                    <div className="col-md-12">
-                                                        <div className="_1st2-member two_no">
-                                                            <div className="_1stimg">
-                                                                <div className="memberImg_">
-                                                                    <img
-                                                                        alt=""
-                                                                        style={{
-                                                                            height: "50px",
-                                                                            width: "50px",
-                                                                            borderRadius:
-                                                                                "50%",
-                                                                        }}
-                                                                        src={
-                                                                            item
-                                                                                .userdata
-                                                                                .image ===
-                                                                                ""
-                                                                                ? "avatars/placeholder-user.png"
-                                                                                : item
-                                                                                    .userdata
-                                                                                    .image
-                                                                        }
-                                                                    />
-                                                                </div>
-                                                                <div className="member_details">
-                                                                    <h5
-                                                                        style={{
-                                                                            color: "#fff",
-                                                                            marginBottom:
-                                                                                "0 !important",
-                                                                            position:
-                                                                                "relative",
-                                                                            top: "10px",
-                                                                        }}
-                                                                    >
-                                                                        {
-                                                                            item
-                                                                                .userdata
-                                                                                .name
-                                                                        }
-                                                                    </h5>
-                                                                </div>
-                                                                <div className="icons-members2">
-                                                                    <img
-                                                                        alt=""
-                                                                        src="img/correct-green.png"
-                                                                        width="37px"
-                                                                        onClick={() =>
-                                                                            moderatorResponse(
-                                                                                item.socketId,
+                                            {participant[0] &&
+                                                participant.map((item) => {
+                                                    return (
+                                                        <div className="col-md-12">
+                                                            <div className="_1st2-member two_no">
+                                                                <div className="_1stimg">
+                                                                    <div className="memberImg_">
+                                                                        <img
+                                                                            alt=""
+                                                                            style={{
+                                                                                height: "50px",
+                                                                                width: "50px",
+                                                                                borderRadius:
+                                                                                    "50%",
+                                                                            }}
+                                                                            src={
                                                                                 true
-                                                                            )
-                                                                        }
-                                                                    />
-                                                                    <img
-                                                                        alt=""
-                                                                        src="img/close.png"
-                                                                        width="37px"
-                                                                        onClick={() =>
-                                                                            moderatorResponse(
-                                                                                item.socketId,
-                                                                                false
-                                                                            )
-                                                                        }
-                                                                    />
+                                                                                    ? "avatars/placeholder-user.png"
+                                                                                    : item
+                                                                                        .userData
+                                                                                        .image
+                                                                            }
+                                                                        />
+                                                                    </div>
+                                                                    <div className="member_details">
+                                                                        <h5
+                                                                            style={{
+                                                                                color: "#fff",
+                                                                                marginBottom:
+                                                                                    "0 !important",
+                                                                                position:
+                                                                                    "relative",
+                                                                                top: "10px",
+                                                                            }}
+                                                                        >
+                                                                            {
+                                                                                item
+                                                                                    .userData
+                                                                                    .name
+                                                                            }
+                                                                        </h5>
+                                                                    </div>
+                                                                    <div className="icons-members2">
+                                                                        <img
+                                                                            alt=""
+                                                                            src="img/correct-green.png"
+                                                                            width="37px"
+                                                                            onClick={() => {
+                                                                                VaniSetupHelper.getInstance().approveJoinRequest(
+                                                                                    item
+                                                                                );
+                                                                                setrequestModel(
+                                                                                    false
+                                                                                );
+                                                                            }}
+                                                                        />
+                                                                        <img
+                                                                            alt=""
+                                                                            src="img/close.png"
+                                                                            width="37px"
+                                                                            onClick={() => {
+                                                                                // moderatorResponse(
+                                                                                //     item.socketId,
+                                                                                //     false
+                                                                                // );
+                                                                                VaniSetupHelper.getInstance().declineJoinRequest(
+                                                                                    item
+                                                                                );
+                                                                                setrequestModel(
+                                                                                    false
+                                                                                );
+                                                                            }}
+                                                                        />
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                );
-                                            })}
+                                                    );
+                                                })}
                                         </div>
                                     </div>
                                 </div>
@@ -1171,7 +1221,7 @@ const Room = React.memo((props) => {
                                 </button>
                                 <div className="model_data">
                                     <div className="model-title">
-                                        <h3>Members</h3>
+                                        <h3>Members erre</h3>
                                     </div>
 
                                     <div className="container">
@@ -1240,117 +1290,72 @@ const Room = React.memo((props) => {
                                                     </div>
                                                 </div>
                                             </div>
-                                            {otherUserSteams.map((item) => {
-                                                return (
-                                                    <div className="col-md-12">
-                                                        <div className="_1st2-member two_no">
-                                                            <div className="_1stimg">
-                                                                <div className="memberImg_">
-                                                                    <img
-                                                                        alt=""
-                                                                        style={{
-                                                                            height: "50px",
-                                                                            width: "50px",
-                                                                            borderRadius:
-                                                                                "50%",
-                                                                        }}
-                                                                        src={
-                                                                            item
-                                                                                .userData
-                                                                                .image ===
-                                                                                ""
-                                                                                ? "avatars/placeholder-user.png"
-                                                                                : item
-                                                                                    .userData
-                                                                                    .image
-                                                                        }
-                                                                    />
-                                                                </div>
-                                                                <div className="member_details">
-                                                                    <h5
-                                                                        style={{
-                                                                            color: "#fff",
-                                                                            marginBottom:
-                                                                                "0 !important",
-                                                                            position:
-                                                                                "relative",
-                                                                            top: "10px",
-                                                                        }}
-                                                                    >
-                                                                        {
-                                                                            item
-                                                                                .userData
-                                                                                .name
-                                                                        }
-                                                                    </h5>
-                                                                </div>
-                                                                <div
-                                                                    className="icons-members"
-                                                                    style={{
-                                                                        top: "8px !important",
-                                                                    }}
-                                                                >
-                                                                    {isModerator ? (
-                                                                        item.qualify ? (
-                                                                            <a
-                                                                                onClick={() =>
-                                                                                    handleDisqualify(
-                                                                                        item
-                                                                                            .userData
-                                                                                            ._id,
-                                                                                        false
-                                                                                    )
-                                                                                }
-                                                                            >
-                                                                                <img
-                                                                                    alt=""
-                                                                                    src="img/rigth2.png"
-                                                                                    width="49px"
-                                                                                />
-                                                                            </a>
-                                                                        ) : (
-                                                                            <a
-                                                                                onClick={() =>
-                                                                                    handleDisqualify(
-                                                                                        item
-                                                                                            .userData
-                                                                                            ._id,
-                                                                                        true
-                                                                                    )
-                                                                                }
-                                                                            >
-                                                                                <img
-                                                                                    alt=""
-                                                                                    src="img/close.png"
-                                                                                    width="49px"
-                                                                                />
-                                                                            </a>
-                                                                        )
-                                                                    ) : null}
-                                                                    <img
-                                                                        alt=""
-                                                                        src={
-                                                                            item.Audio
-                                                                                ? "img/mic2.png"
-                                                                                : "img/mute2.png"
-                                                                        }
-                                                                        width="49px"
-                                                                    />
-                                                                    <img
-                                                                        alt=""
-                                                                        src={
-                                                                            item.Video
-                                                                                ? "img/cam2.png"
-                                                                                : "img/cam-off2.png"
-                                                                        }
-                                                                        width="49px"
-                                                                    />
-                                                                </div>
-                                                            </div>
+                                        </div>
+                                        <div className="row">
+                                            <div className="col-md-12">
+                                                <div className="_1st2-member two_no">
+                                                    <div className="_1stimg">
+                                                        <div className="memberImg_">
+                                                            <img
+                                                                alt=""
+                                                                style={{
+                                                                    height: "50px",
+                                                                    width: "50px",
+                                                                    borderRadius:
+                                                                        "50%",
+                                                                }}
+                                                                src={
+                                                                    profilePic ===
+                                                                        ""
+                                                                        ? `https://ui-avatars.com/api/?name=${username}&background=random`
+                                                                        : profilePic
+                                                                }
+                                                            />
+                                                        </div>
+                                                        <div className="member_details">
+                                                            <h5
+                                                                style={{
+                                                                    color: "#fff",
+                                                                    marginBottom:
+                                                                        "0 !important",
+                                                                    position:
+                                                                        "relative",
+                                                                    top: "10px",
+                                                                }}
+                                                            >
+                                                                {username}
+                                                            </h5>
+                                                        </div>
+                                                        <div
+                                                            className="icons-members"
+                                                            style={{
+                                                                top: "18px !important",
+                                                            }}
+                                                        >
+                                                            <img
+                                                                alt=""
+                                                                src={
+                                                                    isAudioMuted ===
+                                                                        false
+                                                                        ? "img/mic2.png"
+                                                                        : "img/mute2.png"
+                                                                }
+                                                                width="49px"
+                                                            />
+                                                            <img
+                                                                alt=""
+                                                                src={
+                                                                    isVideoMuted ===
+                                                                        false
+                                                                        ? "img/cam2.png"
+                                                                        : "img/cam-off2.png"
+                                                                }
+                                                                width="49px"
+                                                            />
                                                         </div>
                                                     </div>
-                                                );
-                                            })}
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -1405,14 +1410,17 @@ const Room = React.memo((props) => {
                                                 <button
                                                     style={{
                                                         minWidth: "250px",
-                                                        marginBottom:
-                                                            "10px",
+                                                        marginBottom: "10px",
                                                     }}
                                                     className="blue_btn light_blue_btn"
                                                     type="button"
                                                     onClick={() =>
-                                                        setaddFriendByName(true) ||
-                                                        setopenModelForInviteFriend(false)
+                                                        setaddFriendByName(
+                                                            true
+                                                        ) ||
+                                                        setopenModelForInviteFriend(
+                                                            false
+                                                        )
                                                     }
                                                 >
                                                     Add friend by name
@@ -1427,15 +1435,18 @@ const Room = React.memo((props) => {
                                                 <button
                                                     style={{
                                                         minWidth: "250px",
-                                                        marginBottom:
-                                                            "10px",
+                                                        marginBottom: "10px",
                                                     }}
                                                     className="yellow_btn"
                                                     type="button"
-                                                onClick={() =>
-                                                    setaddFriendByFriendListModal(true) ||
-                                                    setopenModelForInviteFriend(false)
-                                                }
+                                                    onClick={() =>
+                                                        setaddFriendByFriendListModal(
+                                                            true
+                                                        ) ||
+                                                        setopenModelForInviteFriend(
+                                                            false
+                                                        )
+                                                    }
                                                 >
                                                     Add friend from friend list
                                                 </button>
@@ -1449,17 +1460,17 @@ const Room = React.memo((props) => {
                                                 <button
                                                     style={{
                                                         minWidth: "250px",
-                                                        marginBottom:
-                                                            "10px",
+                                                        marginBottom: "10px",
                                                     }}
                                                     className="yellow_btn"
                                                     type="button"
-                                                // onClick={() =>
-                                                //     this.setState({
-                                                //         playContestModel: false,
-                                                //         playNewContestModel: true,
-                                                //     })
-                                                // }
+                                                    // onClick={() =>
+                                                    //     this.setState({
+                                                    //         playContestModel: false,
+                                                    //         playNewContestModel: true,
+                                                    //     })
+                                                    // }
+                                                    onClick={copyLink}
                                                 >
                                                     Add friend using link
                                                 </button>
@@ -1473,13 +1484,14 @@ const Room = React.memo((props) => {
                                                 <button
                                                     style={{
                                                         minWidth: "250px",
-                                                        marginBottom:
-                                                            "10px",
+                                                        marginBottom: "10px",
                                                     }}
                                                     className="pink_btn"
                                                     type="button"
                                                     onClick={() =>
-                                                        setopenModelForInviteFriend(false)
+                                                        setopenModelForInviteFriend(
+                                                            false
+                                                        )
                                                     }
                                                 >
                                                     Cancel
@@ -1536,8 +1548,6 @@ const Room = React.memo((props) => {
                     </CModalBody>
                 </CModal>
 
-
-
                 <CModal
                     show={addFriendByName}
                     closeOnBackdrop={true}
@@ -1551,9 +1561,7 @@ const Room = React.memo((props) => {
                                 <button
                                     type="button"
                                     className="close"
-                                    onClick={() =>
-                                        setaddFriendByName(false)
-                                    }
+                                    onClick={() => setaddFriendByName(false)}
                                 >
                                     <span aria-hidden="true">
                                         <img src="./murabbo/img/close.svg" />
@@ -1590,10 +1598,15 @@ const Room = React.memo((props) => {
                         </div>
                     </CModalBody>
                 </CModal>
-
             </section>
         </>
     );
 });
 
-export default Room;
+const mapStateToProps = (state) => {
+    return {
+        waitScreen: state.socketReducers.waitScreen,
+    };
+};
+
+export default connect(mapStateToProps)(Room);

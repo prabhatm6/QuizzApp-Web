@@ -193,6 +193,7 @@ class Detail extends Component {
     }
 
     playWithoutVideo() {
+        console.log("new break");
         this.props.flush();
         this.props.setModerator(true);
         this.props.clearOthetUserStream();
@@ -200,7 +201,7 @@ class Detail extends Component {
         this.props.setSocket("");
         this.props.history.replace(
             "/contests/start_round/" + contestId + "?" + roomId,
-            { state: null }
+            { state: { roomDetails: this.state.data.roomDetails } }
         );
     }
     playWithVideo() {
